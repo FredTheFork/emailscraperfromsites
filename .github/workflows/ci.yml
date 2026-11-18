@@ -1,0 +1,57 @@
+name: Test and package
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: pytest --cov=publicmail --cov-report=term-missing
+      - run: node --check src/publicmail/static/app.js
+      - run: pip wheel --no-deps --wheel-dir /tmp/wheels .
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.lock -r requirements-browser.lock
+      - run: pip install -e '.[dev]'
+      - run: playwright install --with-deps chromium
+      - run: pytest tests/test_browser.py -v
+        env:
+          PUBLICMAIL_TEST_BROWSER: "1"
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build --tag publicmail:test .
+      - run: docker run --rm publicmail:test publicmail doctor
+      - run: |
+          docker compose up -d --wait
+          curl --fail http://127.0.0.1:8000/healthz
+      - if: always()
+        run: docker compose logs && docker compose down
