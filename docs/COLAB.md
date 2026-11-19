@@ -2,7 +2,7 @@
 
 [Open the notebook in Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
 
-Before this PR is merged, use [the pinned preview notebook](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). The link is updated with each published workflow revision. Setup automatically fetches the full-list workflow, falling back to its feature branch until `main` includes workflow version 2. It prints the source commit and rejects a stale installed application. Private input/results never enter Git.
+Before this PR is merged, use [the pinned preview notebook](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/b6602493439a02f982b4b9119ab3e4076690569c/notebooks/PublicMail_Colab.ipynb). The link is updated with each published workflow revision. Setup automatically fetches the full-list workflow, falling back to its feature branch until `main` includes workflow version 2. It prints the source commit and rejects a stale installed application. Private input/results never enter Git.
 
 ## Run it — no crawl options to change
 

@@ -31,7 +31,7 @@ No raw HTML, PDF bodies, or screenshots are retained by default. Only source URL
 
 ### [Open Public Mail in Google Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
 
-Before the Colab PR is merged, [open the pinned preview notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). Setup fetches the latest full-list workflow every time; it uses `main` when ready, otherwise explicitly reports the feature-branch fallback and rejects stale pilot-era application code.
+Before the Colab PR is merged, [open the pinned preview notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/b6602493439a02f982b4b9119ab3e4076690569c/notebooks/PublicMail_Colab.ipynb). Setup fetches the latest full-list workflow every time; it uses `main` when ready, otherwise explicitly reports the feature-branch fallback and rejects stale pilot-era application code.
 
 1. Choose a **CPU Python runtime** and **Runtime → Run all**. No crawl options need changing.
 2. Approve the normal Drive mount and upload your **original `domains.csv`** when prompted. Your 33,144-domain list is private, not published in this repository.
