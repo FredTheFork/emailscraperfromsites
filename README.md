@@ -10,7 +10,7 @@ Your supplied CSV contains **33,144 unique domains**, not 33,144 confirmed email
 
 This project makes the **process recoverable and the gaps measurable**. Limits, failures, blocked sites, and no-email outcomes are exported alongside successes. An observed email is not proof of ownership, deliverability, or marketing consent.
 
-**Run remotely in Google Colab:** use the notebook below for installation, private input upload, pilot/full runs, verified Drive checkpoints, resume, and downloads—no local Python or VPS required. Colab sessions can expire, so plan for resumable sessions rather than a guarantee of one uninterrupted run. An always-on VPS with Docker remains an alternative for continuously supervised operation.
+**Run remotely in Google Colab:** use the notebook below for installation, private input upload, automatic full-list/deeper/recovery passes, verified Drive checkpoints, resume, and downloads—no local Python or VPS required. Colab sessions can expire, so plan for resumable sessions rather than a guarantee of one uninterrupted run. An always-on VPS with Docker remains an alternative for continuously supervised operation.
 
 **About the old log:** the pasted excerpt ends during Companies House resolution. It contains no traceback or final exit status, so it does not establish whether the process crashed, was interrupted, or was still running. The preceding Common Crawl stages report successful completion.
 
@@ -18,11 +18,11 @@ This project makes the **process recoverable and the gaps measurable**. Limits, 
 
 - **Import:** CSV and read-only SQLite input, schema detection, IDN normalization, repeat-safe deduplication, original business metadata preserved.
 - **Discovery:** homepage, HTTPS/www alternatives for ordinary connectivity failures, contact/about/legal/privacy links, a few common contact paths, robots-declared sitemaps and sitemap indexes, other internal links up to configurable budgets.
-- **Extraction:** visible text, `mailto:` (including free providers), HTML entities, structured data, data attributes, common `[at]`/`[dot]` forms, static Cloudflare email obfuscation, ROT13 email attributes, simple JS literals/concatenations/reversals, and text PDFs.
-- **Optional JS fallback:** Chromium rendering of a small number of pages on no-email sites; uses the same safe HTTP pipeline. Not stealth and not an access-control bypass.
+- **Extraction:** visible text, `mailto:` (including free providers), HTML entities, structured data, data attributes, common `[at]`/`[dot]` forms, static Cloudflare email obfuscation, ROT13 email attributes, simple JS literals/concatenations/reversals, public noscript/templates, nonprinting joiners, and text PDFs.
+- **JavaScript coverage:** early rendering of JS-only homepage navigation; bounded contact-page rendering even after a footer/designer email was found in automatic Colab mode. Uses the same safe HTTP pipeline, not stealth or an access-control bypass.
 - **Reliability:** persistent site queue and page frontier, per-page atomic evidence/discovery commits, an exclusive runner lock, recovery after interruption, bounded requests/downloads/PDF parsing, durable backoff and `Retry-After`.
 - **Observability:** authenticated dashboard, live totals, pause/resume, 100-claim pilot, full queue, page-level trails, searchable domains/emails, requeue controls, worker heartbeat, coverage CSV, online SQLite backups.
-- **Colab:** complete notebook with isolated installation, private CSV/SQLite upload, optional Chromium, measured pilot/full runs, progress, verified multi-generation Drive snapshots, recovery, gap requeue, and CSV/JSONL ZIP downloads.
+- **Colab:** complete notebook with isolated installation, private CSV/SQLite upload, automatic Chromium installation, whole-list → deeper contacts → transient recovery, no default pilot/time stop, verified Drive snapshots, stage-aware resume, unmistakable incomplete reports, and CSV/JSONL ZIP downloads.
 - **Deployment alternative:** non-root Docker image, Compose, persistent volume, optional HTTPS reverse proxy, optional browser build, pinned runtime dependencies, automated tests and CI.
 
 No raw HTML, PDF bodies, or screenshots are retained by default. Only source URLs, short evidence context, methods, and timestamps are saved.
@@ -31,13 +31,15 @@ No raw HTML, PDF bodies, or screenshots are retained by default. Only source URL
 
 ### [Open Public Mail in Google Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
 
-Before the Colab PR is merged, [open the pinned preview notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). The installer uses `main` when ready, otherwise explicitly reports the feature-branch fallback.
+Before the Colab PR is merged, [open the pinned preview notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). Setup fetches the latest full-list workflow every time; it uses `main` when ready, otherwise explicitly reports the feature-branch fallback and rejects stale pilot-era application code.
 
-1. Choose a **CPU Python runtime**; leave **Use Google Drive** enabled.
-2. Run all cells, approve the normal Drive mount, and upload your **actual `domains.csv`** when prompted (or select a private Drive file path). Your 33,144-domain CSV is **not** published in this repository.
-3. Review the default **100-claim pilot** and its evidence/coverage ZIP.
-4. Select **full in the Start/resume cell**, then run that cell again. It processes the saved queue remotely; no reinstall/re-upload is needed.
-5. Download the result ZIP, also copied to your private Drive project. After a runtime reset, run setup with the **same project name**, restore the verified snapshot, and continue.
+1. Choose a **CPU Python runtime** and **Runtime → Run all**. No crawl options need changing.
+2. Approve the normal Drive mount and upload your **original `domains.csv`** when prompted. Your 33,144-domain list is private, not published in this repository.
+3. Leave collection working: it attempts the **entire saved queue**, then automatically deepens contact discovery and performs bounded transient recovery. **No default 100-site pilot, five-hour stop or manual second-pass switch.**
+4. Download the result ZIP, also copied to private **MyDrive → PublicMail → publicmail-33144 → exports**. Read **`READ_ME_FIRST.txt`** for started/unstarted counts and completion status, not just address totals.
+5. If Colab stops or you are resuming an old small pilot result, use the **same Google account/project** and **Run all again**. Existing email evidence is kept and unfinished websites/passes resume automatically; a finished plan is not repeatedly restarted.
+
+**Why a small ZIP can be misleading:** the old notebook defaulted to only 100 site claims. Its exports could therefore contain emails from a small fraction of the list. The current workflow reports **NEVER STARTED**, queued websites, pass history, errors and limits, and labels unfinished work **INCOMPLETE** (an explicitly requested pilot is **PILOT_ONLY**). The previous 120-email ZIP/state has not been inspected, so its exact cause is not established.
 
 The notebook keeps the active SQLite DB on Colab's **local `/content` disk**, not the Drive mount; only verified closed snapshots/input/result ZIPs go to Drive. It retains three good snapshot generations, handles graceful interruption, and stops new claims if periodic backup fails. An abrupt runtime loss can still discard work since the last completed remote snapshot. Use only **one Colab runtime per project**; Drive's advisory marker is not a distributed lock guarantee.
 
@@ -154,7 +156,8 @@ For a non-Docker browser install: `pip install -r requirements-browser.lock` the
 | `unique_emails.csv` | One row per globally unique address, website count, representative public source, first/last seen. |
 | `observations.csv` | **Every** website/address/source/method observation, short context, confidence, and timestamps. |
 | `coverage.csv` | **Every** imported website, including those without emails: status, reason, attempts, limits, remaining frontier, page errors/skips, browser errors, and timestamps. |
-| `summary.json` | Current totals and worker state (CLI export). |
+| `summary.json` | Current totals/worker state plus a `collection` completion report. |
+| **`READ_ME_FIRST.txt`, `run_report.json`** | Completion label, started/unstarted/queue counts, stop reason, automatic pass history and coverage/error diagnostics. |
 | `observations.jsonl` | Optional exact machine-readable observations (`--jsonl`), without spreadsheet escaping. |
 
 CSV is UTF-8 with a BOM for Excel. Cells beginning with spreadsheet formulas are prefixed with `'` for safety; use JSONL for exact programmatic strings. Live exports are consistent per individual file; pause and let active sites finish for aligned multi-file totals.
@@ -173,11 +176,11 @@ Use **websites with at least one email / imported websites**, not merely the tot
 
 Check `completion_reason` (`page_limit`, `depth_limit`, `frontier_exhausted`, `site_timeout`, etc.), `candidate_truncated`, remaining pages, and page errors. Increase budgets only where justified, then pilot a continuation or an explicit fresh pass. Historical observations are retained on retries; timestamps reveal when they were last seen. There is no mailbox verification or automatic deletion/retention policy.
 
-Throughput is workload-dependent. At this scale, plan for **hours to days**, not a fixed completion promise. Measure the pilot's observed sites/hour, inspect 429/403 rates, and adjust conservatively. A bigger concurrency number cannot make one site safely accept unlimited requests.
+Throughput is workload-dependent. At this scale, plan for **hours to days** and resumable Colab sessions, not a fixed completion promise. The Colab defaults automatically apply bounded deeper/recovery passes; the separate VPS workflow still offers an explicit pilot. Inspect 429/403 rates and never increase load to evade restrictions. A bigger concurrency number cannot make one site safely accept unlimited requests.
 
 ## Security, acceptable use, and limitations
 
-- Respects robots on every origin and redirect; inaccessible robots policies fail closed. 404/410 robots files allow crawling. 401/403 homepages and access challenges stop that site. An individual robots-disallowed path is skipped.
+- Respects robots on every origin and redirect; inaccessible robots policies fail closed. 404/410 robots files allow crawling. 401/403 homepages and access challenges stop that site. Individually denied leaf paths are retained/skipped without retrying them in automatic deeper passes; independent permitted public paths remain eligible.
 - Identifiable user agent, paced same-site requests, timeout limits, TLS verification, backoff/jitter and `Retry-After`. Public HTTP fallback is optional and never used to work around a 401/403/CAPTCHA.
 - Rejects credentials in URLs, non-web schemes/ports, IP-literal targets, and private/reserved DNS answers, including redirect/resource targets. The optional browser cannot directly access the network; permitted requests go through the safe HTTP client.
 - Authentication is a private access key; the UI keeps it in session storage for the current tab and sends an Authorization header. No public results API, token-in-URL links, or unauthenticated control endpoints.
@@ -197,6 +200,6 @@ pytest --cov=publicmail --cov-report=term-missing
 node --check src/publicmail/static/app.js
 ```
 
-The automated suite uses controlled local/fake websites, not unsolicited live crawling. It covers extraction, input schemas, deduplication, safe exports, transaction rollback, robots and redirects, response bounds, retries, pause/resume primitives, worker locks, cancellation recovery, PDFs, authentication, and the API/CLI. CI also builds and health-checks the standard container. Real-site yield is **not** established by unit tests. Run the deployment pilot before the full crawl.
+The automated suite uses controlled local/fake websites, not unsolicited live crawling. It covers extraction, input schemas, deduplication, safe exports, transaction rollback, robots and redirects, response bounds, retries, pause/resume primitives, worker locks, cancellation recovery, PDFs, authentication, and the API/CLI. CI also builds and health-checks the standard container. Real-site yield is **not** established by tests. Automatic Colab tests cover 257 synthetic websites, deeper coverage and stage recovery without a default 100-site cap; the separate VPS deployment offers an explicit pilot.
 
 Colab-specific tests also verify snapshot recovery, failed-copy retention, subprocess supervision and private-environment installation. See `docs/COLAB.md` for the opt-in Jupyter notebook execution tests; these use synthetic fixtures, not a connected Google account or real-site yield.

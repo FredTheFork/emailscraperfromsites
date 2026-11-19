@@ -33,6 +33,15 @@ from filelock import FileLock, Timeout
 
 from . import __version__
 from .config import CrawlSettings
+from .coverage import (
+    WORKFLOW_VERSION,
+    automatic_profiles,
+    collection_report,
+    ensure_plan,
+    finish_stage,
+    prepare_stage,
+    report_text,
+)
 from .engine import Engine
 from .exporter import write_exports
 from .importer import import_file
@@ -482,9 +491,11 @@ class Workspace:
             raise ValueError("Run prepare first so Drive recovery is considered before opening a database")
         with self.open_store() as store:
             stats = store.stats()
+            collection = collection_report(store)
         marker = self.work_dir / "last-checkpoint.json"
         return {
             "stats": stats,
+            "collection": collection,
             "last_checkpoint": _json(marker) if marker.exists() else None,
             "work_dir": str(self.work_dir),
             "backup_dir": str(self.backup_root),
@@ -539,15 +550,22 @@ async def export_job(workspace: Workspace, deadline_seconds: float) -> dict:
 async def run_session(
     workspace: Workspace,
     *,
-    max_sites: int | None = 100,
+    max_sites: int | None = None,
     settings: dict | None = None,
-    duration: float = 5 * 3600,
+    duration: float = 0,
+    automatic: bool = True,
     checkpoint_interval: float = 120,
     checkpoint_timeout: float = 180,
     engine_factory: Callable = Engine,
     checkpointer: Callable = checkpoint_job,
     exporter: Callable = export_job,
 ) -> dict:
+    """Drain the WHOLE list, then bounded persisted coverage/recovery passes.
+
+    No default pilot or planned session stop. A user-requested claim/time cap is
+    still supported, but must never be reported as a completed full collection.
+    Google can terminate a runtime; the next Run all resumes the saved stage.
+    """
     if max_sites is not None and not 1 <= max_sites <= 100_000:
         raise ValueError("Pilot limit must be between 1 and 100,000 claims, or None for the full queue")
     if not all(math.isfinite(x) and x > 0 for x in (checkpoint_interval, checkpoint_timeout)):
@@ -556,85 +574,196 @@ async def run_session(
         raise ValueError("Session duration must be nonnegative and finite (0 means no planned stop)")
     if not workspace.db.exists():
         raise ValueError("Run prepare first; do not bypass Drive recovery")
+    automatic = automatic and max_sites is None
+    overrides = settings or {}
+    profiles = automatic_profiles(browser=overrides.get("browser", True))
     with workspace.operation(), workspace.lease():
-        with workspace.idle_worker(), workspace.open_store() as store:
-            workspace.identity(store)
-            store.recover_running()
-            store.control("pause")
-            configured = CrawlSettings.model_validate(store.settings().model_dump() | (settings or {}))
-            store.save_settings(configured)
-            if not store.stats()["total"]:
+        with workspace.idle_worker(), workspace.open_store() as initial:
+            workspace.identity(initial)
+            initial.recover_running()
+            initial.control("pause")
+            if not initial.stats()["total"]:
                 raise ValueError("The queue is empty. Import your CSV before starting a crawl.")
-        # If the first backup cannot be saved, do not start target-site requests.
-        await checkpointer(workspace, checkpoint_timeout)
+            if automatic:
+                plan = ensure_plan(initial)
+                plan = prepare_stage(initial)
+                index = min(plan["stage_index"], len(profiles) - 1)
+                configured = CrawlSettings.model_validate(profiles[index] | overrides)
+            else:
+                configured = CrawlSettings.model_validate(initial.settings().model_dump() | overrides)
+                initial.set_meta("collection_run_kind", "pilot" if max_sites else "standard")
+            initial.save_settings(configured)
+            initial.set_meta("collection_stop_reason", "running")
         store = Store(workspace.db)
-        engine = engine_factory(store)
-        task = None
+        engine = task = None
         loop = asyncio.get_running_loop()
         previous_handlers = {}
         interrupted = False
+        reason = "error"
+        primary_error = None
+        cleanup_errors = []
+        exports = final = None
+        # Configuration was guarded, but a rejected worker startup must not
+        # pause/export another process that won the worker lock in the gap.
+        safe_finalize = True
+        deadline = time.monotonic() + duration if duration else math.inf
+        next_backup = time.monotonic() + checkpoint_interval
 
         def stop() -> None:
             nonlocal interrupted
             interrupted = True
-            engine.stop()
+            if engine is not None:
+                engine.stop()
+
+        async def save_checkpoint() -> dict:
+            nonlocal next_backup, reason
+            try:
+                result = await checkpointer(workspace, checkpoint_timeout)
+            except Exception:
+                reason = "checkpoint_error"
+                raise
+            next_backup = time.monotonic() + checkpoint_interval
+            return result
 
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 previous_handlers[sig] = signal.getsignal(sig)
                 with suppress(NotImplementedError, ValueError):
                     loop.add_signal_handler(sig, stop)
-            task = asyncio.create_task(engine.run(service=False, start=True, limit=max_sites))
-            next_backup = time.monotonic() + checkpoint_interval
-            deadline = time.monotonic() + duration if duration else math.inf
-            reason = "finished"
-            while not task.done():
-                now = time.monotonic()
-                if now >= deadline:
+            # If the first backup fails, no target-site requests may start.
+            await save_checkpoint()
+            while True:
+                if interrupted:
+                    reason = "interrupted"
+                    break
+                if time.monotonic() >= deadline:
                     reason = "session_budget"
-                    engine.stop()
                     break
-                wait = max(0, min(next_backup, deadline) - now)
-                await asyncio.wait({task}, timeout=wait)
-                if task.done():
+                if automatic:
+                    plan = store.get_meta("automatic_coverage_plan")
+                    if plan["state"] == "finished":
+                        reason = "automatic_complete"
+                        break
+                    log.info(
+                        "AUTOMATIC COVERAGE %s/3: %s; %s input websites. No pilot limit.",
+                        plan["stage_index"] + 1,
+                        plan["stages"][plan["stage_index"]]["name"],
+                        plan["input_total"],
+                    )
+                engine = engine_factory(store)
+                safe_finalize = False
+                task = asyncio.create_task(engine.run(service=False, start=True, limit=max_sites))
+                while not task.done():
+                    now = time.monotonic()
+                    if now >= deadline:
+                        reason = "session_budget"
+                        engine.stop()
+                        break
+                    await asyncio.wait({task}, timeout=max(0, min(next_backup, deadline) - now))
+                    if task.done():
+                        break
+                    if time.monotonic() >= next_backup:
+                        await save_checkpoint()
+                        log.info("Verified checkpoint saved; full-list collection continues")
+                await asyncio.wait_for(asyncio.shield(task), timeout=40)
+                safe_finalize = engine.started.is_set()
+                if interrupted:
+                    reason = "interrupted"
                     break
-                if time.monotonic() >= next_backup:
-                    await checkpointer(workspace, checkpoint_timeout)
-                    log.info("Drive/local checkpoint completed; crawl is continuing")
-                    next_backup = time.monotonic() + checkpoint_interval
-            await asyncio.wait_for(asyncio.shield(task), timeout=40)
-            if interrupted:
-                reason = "interrupted"
+                if reason == "session_budget":
+                    break
+                stats = store.stats()
+                remaining = sum(stats["statuses"][s] for s in ("pending", "retry", "running"))
+                if remaining:
+                    reason = "claim_limit" if store.get_meta("run_remaining") == 0 else "paused"
+                    break
+                if not automatic:
+                    reason = "queue_drained"
+                    break
+                with workspace.idle_worker():
+                    plan = finish_stage(store)
+                    if plan["state"] == "finished":
+                        reason = "automatic_complete"
+                        break
+                    plan = prepare_stage(store)
+                    store.save_settings(
+                        CrawlSettings.model_validate(profiles[plan["stage_index"]] | overrides)
+                    )
+                # Persist both the completed stage AND the next selection before
+                # issuing requests in that pass. Interrupted transitions resume.
+                await save_checkpoint()
+        except BaseException as exc:
+            primary_error = exc
+            if reason != "checkpoint_error":
+                reason = (
+                    "interrupted" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
+                )
         finally:
-            engine.stop()
-            if task and not task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=40)
-                except (TimeoutError, asyncio.CancelledError):
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                except Exception:
-                    log.exception("Worker stopped after a session/checkpoint error")
-            # Stop and release the worker before exporting an aligned bundle.
-            owner_started = engine.started.is_set()
+            if engine is not None:
+                engine.stop()
+                if task and not task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=40)
+                    except (TimeoutError, asyncio.CancelledError):
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    except Exception:
+                        log.exception("Worker stopped after a session/checkpoint error")
+                safe_finalize = engine.started.is_set()
             try:
-                if owner_started:
-                    store.control("pause")
+                if safe_finalize:
+                    # Retain the idle-worker lock THROUGH export/checkpoint so
+                    # an external CLI cannot change rows in an aligned bundle.
+                    with workspace.idle_worker():
+                        store.control("pause")
+                        store.set_meta("collection_stop_reason", reason)
+                        # Preserve the FIRST error. Failed final I/O must not
+                        # mask it; attempt BOTH export and checkpoint anyway.
+                        for action, job in (("export", exporter), ("checkpoint", checkpointer)):
+                            try:
+                                output = await job(workspace, checkpoint_timeout)
+                                if action == "export":
+                                    exports = output
+                                else:
+                                    final = output
+                            except Exception as exc:
+                                cleanup_errors.append(exc)
+                                log.exception(
+                                    "Final %s failed; local evidence and previous snapshots are retained",
+                                    action,
+                                )
+            except Exception as exc:
+                safe_finalize = False
+                cleanup_errors.append(exc)
             finally:
-                store.close()
-                for sig, previous in previous_handlers.items():
-                    with suppress(NotImplementedError, ValueError):
-                        loop.remove_signal_handler(sig)
-                        signal.signal(sig, previous)
-            # The export child writes last-export.json BEFORE its Drive copy, so
-            # the notebook can still download local results after a Drive error.
-            if owner_started:
                 try:
-                    exports = await exporter(workspace, checkpoint_timeout)
+                    store.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
                 finally:
-                    final = await checkpointer(workspace, checkpoint_timeout)
-        result = {"reason": reason, **workspace.status(), **exports, "checkpoint": final}
-        _atomic_json(workspace.work_dir / "last-run.json", result)
+                    for sig, previous in previous_handlers.items():
+                        with suppress(NotImplementedError, ValueError):
+                            loop.remove_signal_handler(sig)
+                            signal.signal(sig, previous)
+        if safe_finalize:
+            try:
+                result = {
+                    "reason": reason,
+                    **workspace.status(),
+                    **(exports or {}),
+                    "checkpoint": final,
+                    "cleanup_errors": [f"{type(e).__name__}: {e}" for e in cleanup_errors],
+                }
+                _atomic_json(workspace.work_dir / "last-run.json", result)
+                log.info("%s", report_text(result["collection"]))
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        if primary_error is not None:
+            raise primary_error
+        if cleanup_errors:
+            raise cleanup_errors[0]
+        if not safe_finalize:
+            raise RuntimeError("The worker never acquired ownership; no completed run is being reported")
         return result
 
 
@@ -652,18 +781,27 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--table")
     command = subs.add_parser("run")
     command.add_argument(
-        "--max-sites", type=int, default=100, help="0 = full saved queue; otherwise claim limit"
+        "--max-sites",
+        type=int,
+        default=0,
+        help="0 (default) = full saved queue; positive = explicit pilot claim limit",
     )
     command.add_argument(
-        "--hours", type=float, default=5, help="0 = no planned stop; Colab limits still apply"
+        "--hours",
+        type=float,
+        default=0,
+        help="0 (default) = no planned stop; Colab runtime limits still apply",
     )
     command.add_argument("--checkpoint-seconds", type=float, default=120)
     command.add_argument("--checkpoint-timeout", type=float, default=180)
-    command.add_argument("--concurrency", type=int, default=16)
-    command.add_argument("--delay", type=float, default=1.5)
-    command.add_argument("--max-pages", type=int, default=24)
-    command.add_argument("--max-depth", type=int, default=3)
-    command.add_argument("--browser", action=argparse.BooleanOptionalAction, default=False)
+    command.add_argument("--concurrency", type=int)
+    command.add_argument("--delay", type=float)
+    command.add_argument("--max-pages", type=int)
+    command.add_argument("--max-depth", type=int)
+    command.add_argument("--browser", action=argparse.BooleanOptionalAction, default=True)
+    command.add_argument(
+        "--single-pass", action="store_true", help="Advanced: disable automatic follow-up passes"
+    )
     command = subs.add_parser("retry")
     command.add_argument(
         "--status",
@@ -702,7 +840,9 @@ def main() -> None:
             if args.checkpoint_seconds + args.checkpoint_timeout >= LEASE_SECONDS - 60:
                 raise ValueError("Checkpoint interval + timeout must fit inside the advisory session lease")
             settings = {
-                k: getattr(args, k) for k in ("concurrency", "delay", "max_pages", "max_depth", "browser")
+                k: getattr(args, k)
+                for k in ("concurrency", "delay", "max_pages", "max_depth", "browser")
+                if getattr(args, k) is not None
             }
             output = asyncio.run(
                 run_session(
@@ -710,6 +850,7 @@ def main() -> None:
                     max_sites=None if args.max_sites == 0 else args.max_sites,
                     settings=settings,
                     duration=args.hours * 3600,
+                    automatic=not args.single_pass,
                     checkpoint_interval=args.checkpoint_seconds,
                     checkpoint_timeout=args.checkpoint_timeout,
                 )
@@ -741,6 +882,7 @@ def main() -> None:
             output = {
                 "python": sys.version.split()[0],
                 "version": __version__,
+                "workflow_version": WORKFLOW_VERSION,
                 "free_disk_gib": round(shutil.disk_usage(workspace.work_dir).free / 1024**3, 2),
                 "browser_launch_checked": args.check_browser,
                 "persistent": bool(workspace.drive_dir),

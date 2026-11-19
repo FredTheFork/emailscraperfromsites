@@ -74,7 +74,9 @@ def _context(text: str, start: int, end: int) -> str:
 
 
 def text_emails(text: str, method: str = "public_text", confidence: str = "high") -> list[EmailHit]:
-    text = html.unescape(text)
+    # Public copy often inserts zero-width characters to frustrate harvesting.
+    # Remove only non-printing joiners, never guess missing address components.
+    text = html.unescape(text).translate(dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff")))
     hits: dict[tuple[str, str], EmailHit] = {}
     for match in _EMAIL.finditer(text):
         if email := normalize_email(match.group(1)):
@@ -150,13 +152,13 @@ def analyse_html(source: str, base_url: str, *, allow_private: bool = False) -> 
             hits.append(EmailHit(email, "split_attribute", node.get_text(" ", strip=True)[:200], "medium"))
         for attr, value in node.attrs.items():
             if (
-                attr in {"data-email", "data-mail", "data-contact", "content", "aria-label", "title"}
+                attr in {"data-email", "data-mail", "data-contact", "content", "aria-label", "title", "alt"}
                 or "email" in attr
             ):
                 value = " ".join(value) if isinstance(value, list) else str(value)
                 if attr == "data-enc-email":
                     value = codecs.decode(value, "rot_13")
-                hits.extend(text_emails(value, "html_attribute", "medium"))
+                hits.extend(text_emails(unquote(value), "html_attribute", "medium"))
     for script in soup.find_all("script"):
         script_text = _decode_js(script.get_text()[:1_000_000])
         structured = "ld+json" in str(script.get("type", ""))
@@ -182,6 +184,11 @@ def analyse_html(source: str, base_url: str, *, allow_private: bool = False) -> 
             except (ValueError, OverflowError):
                 pass
     script_size = sum(len(node.get_text()) for node in soup.find_all("script"))
+    for node in soup.find_all(["noscript", "template"]):
+        # These are publicly delivered fallbacks/templates, not authenticated
+        # content. Preserve a distinct method/confidence rather than dropping
+        # an address that only appears in the non-JavaScript contact fallback.
+        hits.extend(text_emails(node.get_text(" ", strip=True), node.name + "_text", "medium"))
     for node in soup(["script", "style", "noscript", "template"]):
         node.decompose()
     visible = soup.get_text(" ", strip=True)

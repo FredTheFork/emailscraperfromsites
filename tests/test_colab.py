@@ -217,6 +217,8 @@ def test_exports_are_exactly_results_not_input_or_database(workspace, tmp_path):
             "observations.jsonl",
             "coverage.csv",
             "summary.json",
+            "run_report.json",
+            "READ_ME_FIRST.txt",
         }
         assert b"acmeglazing.co.uk" in archive.read("coverage.csv")
     assert Path(output["drive_export_zip"]).read_bytes() == Path(output["export_zip"]).read_bytes()
@@ -255,12 +257,17 @@ async def test_full_pilot_run_uses_real_engine_and_exports_then_resumes(workspac
 
         return Engine(store, client_factory=client)
 
-    first = await run_session(workspace, max_sites=1, settings={"max_pages": 1}, engine_factory=factory)
+    first = await run_session(
+        workspace, max_sites=1, settings={"max_pages": 1, "browser": False}, engine_factory=factory
+    )
+    assert first["reason"] == "claim_limit"
+    assert first["collection"]["state"] == "PILOT_ONLY"
+    assert first["stats"]["sites_unstarted"] == 1
     assert first["stats"]["terminal"] == 1
     assert first["stats"]["statuses"]["pending"] == 1
     assert first["stats"]["unique_emails"] == 1
     assert await asyncio.to_thread(Path(first["drive_export_zip"]).is_file)
-    second = await run_session(workspace, max_sites=None, engine_factory=factory)
+    second = await run_session(workspace, max_sites=None, settings={"browser": False}, engine_factory=factory)
     assert second["stats"]["terminal"] == 2
     assert second["stats"]["unique_emails"] == 2
     assert second["stats"]["mode"] == "paused"
@@ -288,7 +295,7 @@ async def test_periodic_backup_failure_stops_claims_and_keeps_local_progress(wor
     with pytest.raises(RuntimeError, match="Drive disconnected"):
         await run_session(
             workspace,
-            settings={"max_pages": 1},
+            settings={"max_pages": 1, "browser": False},
             engine_factory=factory,
             checkpointer=save,
             checkpoint_interval=0.02,
@@ -310,7 +317,7 @@ async def test_session_budget_stops_safely_without_chasing_an_email_count(worksp
     result = await run_session(
         workspace,
         max_sites=None,
-        settings={"max_pages": 1},
+        settings={"max_pages": 1, "browser": False},
         duration=0.01,
         engine_factory=lambda store: Engine(store, client_factory=lambda cfg: FakeFetcher(cfg, {HOME: slow})),
     )
@@ -389,7 +396,7 @@ async def test_runner_rejected_before_ownership_does_not_pause_someone_elses_run
             raise RuntimeError("Another worker won the lock")
 
     with pytest.raises(RuntimeError, match="Another worker"):
-        await run_session(workspace, engine_factory=RejectedEngine)
+        await run_session(workspace, settings={"browser": False}, engine_factory=RejectedEngine)
     assert workspace.status()["stats"]["mode"] == "running"
     with workspace.open_store() as store:
         store.control("pause")

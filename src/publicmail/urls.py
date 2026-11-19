@@ -10,7 +10,7 @@ import tldextract
 _SUFFIX = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
 _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TRACKING = {"gclid", "fbclid", "msclkid", "ref", "referrer", "session", "sid"}
-_QUERY_KEYS = {"page_id", "p", "id", "lang", "language", "page", "route"}
+_QUERY_KEYS = {"page_id", "p", "id", "lang", "language", "page", "route", "option", "view", "itemid", "catid"}
 _ASSET = re.compile(
     r"\.(?:jpe?g|png|gif|webp|avif|svg|ico|css|js|map|woff2?|ttf|eot|mp[34]|mov|avi|webm|zip|rar|7z|exe|dmg|rss|xml)$",
     re.I,
@@ -123,13 +123,14 @@ def crawl_link(href: str, base: str, *, allow_private: bool = False) -> str | No
         return None
     if parts.query:
         query = parse_qsl(parts.query)
-        if any(k.lower() not in _QUERY_KEYS for k, _ in query) or len(query) > 3:
+        if any(k.lower() not in _QUERY_KEYS for k, _ in query) or len(query) > 5:
             return None
     return url
 
 
 def link_priority(url: str, label: str = "") -> int:
-    text = (urlsplit(url).path + " " + label).lower()
+    parts = urlsplit(url)
+    text = (parts.path + " " + parts.query + " " + label).lower()
     if re.search(r"contact|enquir|e-mail|email|reach.us|get.in.touch", text):
         return 950
     if re.search(r"about|our.team|meet.the|impressum", text):

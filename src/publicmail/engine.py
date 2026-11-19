@@ -58,6 +58,10 @@ class SiteCrawler:
             for path, score in [
                 ("/contact", 850),
                 ("/contact-us", 850),
+                ("/contact.html", 830),
+                ("/contact-us.html", 825),
+                ("/contact.php", 820),
+                ("/about", 650),
                 ("/about-us", 650),
                 ("/privacy-policy", 620),
             ]
@@ -95,6 +99,7 @@ class SiteCrawler:
         root_error: FetchError | None = None
         fallback_wanted = False
         rendered = sum(bool(page["browser_status"]) for page in self.store.site_pages(sid))
+        render_preferred: int | None = None
         reason = "frontier_exhausted"
         while True:
             current = self.store.get_site(sid)
@@ -106,6 +111,10 @@ class SiteCrawler:
                 page = None
             elif not page and counts["pending"]:
                 reason = "depth_limit"
+            # Render a JS shell before spending the HTTP budget on guessed
+            # paths. Its rendered navigation may be the only contact discovery.
+            if render_preferred is not None:
+                page = None
             if page:
                 if page["kind"] == "sitemap" and counts["sitemap"] >= cfg.max_sitemaps:
                     self.store.save_page(page["id"], status="skipped", error="sitemap_limit")
@@ -142,11 +151,14 @@ class SiteCrawler:
                 except FetchError as exc:
                     # A forbidden path does not prohibit other allowed paths, but
                     # a forbidden homepage or an access challenge stops this site.
-                    if exc.category == "robots_denied" and not is_home:
+                    if not is_home and home and exc.category in {"robots_denied", "access_denied"}:
                         self.store.save_page(
-                            page["id"], status="skipped", error=str(exc), http_status=exc.status
+                            page["id"],
+                            status="skipped" if exc.category == "robots_denied" else "blocked",
+                            error=str(exc),
+                            http_status=exc.status,
                         )
-                        continue
+                        continue  # Do not retry the denied URL; independent public paths remain eligible.
                     if exc.category in {"access_denied", "robots_denied", "offsite_redirect"}:
                         self.store.save_page(
                             page["id"], status="blocked", error=str(exc), http_status=exc.status
@@ -283,6 +295,8 @@ class SiteCrawler:
                         cap=cfg.max_candidates,
                         **base,
                     )
+                    if self.renderer and analysis.javascript_hint and rendered < cfg.browser_pages:
+                        render_preferred = page["id"]
                 else:
                     self.store.save_page(
                         page["id"], status="skipped", error="Unsupported content type", **base
@@ -297,14 +311,23 @@ class SiteCrawler:
                 else:
                     self.store.finish_site(sid, "failed", "unreachable", str(error))
                 return
-            # Browser is a deliberately small second pass ONLY for sites where
-            # HTTP found no email. Once selected, finish up to browser_pages.
+            # Do not let a designer/footer email suppress rendering of the
+            # site's actual contact details. Automatic coverage includes key
+            # pages even with existing evidence, within a finite render budget.
             fallback_wanted |= not current["email_count"]
             candidates = (
-                self.store.browser_candidates(sid, 1)
-                if self.renderer and fallback_wanted and rendered < cfg.browser_pages
+                self.store.browser_candidates(
+                    sid,
+                    1,
+                    important_only=not fallback_wanted and render_preferred is None,
+                    preferred_id=render_preferred,
+                )
+                if self.renderer
+                and (fallback_wanted or cfg.browser_contact_pages or render_preferred is not None)
+                and rendered < cfg.browser_pages
                 else []
             )
+            render_preferred = None
             if candidates:
                 candidate = candidates[0]
                 try:
@@ -362,9 +385,11 @@ class Engine:
         if time.monotonic() - self.last_progress > 30:
             stats = self.store.stats()
             log.info(
-                "Progress: %s/%s terminal | %s sites with email | %s unique addresses | %s active | mode=%s",
+                "Progress: %s/%s outcomes | %s websites started | %s NEVER STARTED | %s sites with email | %s unique addresses | %s active | mode=%s",
                 stats["terminal"],
                 stats["total"],
+                stats["sites_started"],
+                stats["sites_unstarted"],
                 stats["with_email"],
                 stats["unique_emails"],
                 stats["statuses"]["running"],

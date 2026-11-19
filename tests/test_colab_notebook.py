@@ -36,8 +36,12 @@ def test_notebook_is_clean_valid_python_and_safe_to_run_all():
             compile("".join(cell["source"]), cell["id"], "exec")
     cells = {cell["id"]: "".join(cell["source"]) for cell in notebook["cells"]}
     assert "USE_GOOGLE_DRIVE = True" in cells["settings"]
-    assert 'RUN_MODE = "pilot"' in cells["run"]
-    assert "REQUEUE_GAPS = False" in cells["retry"]
+    assert 'client.run("run",' in cells["run"]
+    assert "RUN_MODE" not in cells["run"]
+    assert "--max-sites" not in cells["run"] and "--hours" not in cells["run"]
+    assert "REQUEUE_GAPS" not in cells["retry"]
+    assert "has_full_workflow()" in cells["install"]
+    assert "workflow_version" in cells["restore"]
     assert "drive.mount" in cells["restore"]
     assert "--drive-mount" not in cells["install"]  # The mount is verified in its own step.
     assert "git reset" not in cells["install"] and "git clean" not in cells["install"]
@@ -141,7 +145,7 @@ def test_entire_notebook_executes_with_fixture_websites_and_reruns(tmp_path):
                     'https://secondglazing.co.uk/': response('https://secondglazing.co.uk/', 'fixture@gmail.com'),
                 })
             return Engine(store, client_factory=client)
-        settings = {k: getattr(args, k) for k in ('concurrency','delay','max_pages','max_depth','browser')}
+        settings = {k: getattr(args, k) for k in ('concurrency','delay','max_pages','max_depth','browser') if getattr(args, k) is not None}
         result = asyncio.run(run_session(workspace, max_sites=args.max_sites or None,
             duration=args.hours*3600, settings=settings, engine_factory=factory))
         print(json.dumps(result))
@@ -161,6 +165,19 @@ def test_entire_notebook_executes_with_fixture_websites_and_reruns(tmp_path):
         spec = importlib.util.spec_from_file_location('colab_client', {str(ROOT / "notebooks" / "colab_client.py")!r})
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        # Source refresh must never fetch/checkout the REAL repository symlink.
+        real_run, real_output = subprocess.run, subprocess.check_output
+        def fixture_run(args, **kw):
+            if args[0] == 'git':
+                return subprocess.CompletedProcess(args, 0)
+            return real_run(args, **kw)
+        def fixture_output(args, **kw):
+            if args[0] == 'git':
+                if 'status' in args: return ''
+                if 'show' in args: return 'WORKFLOW_VERSION = 2'
+                return 'fixture-source-revision'
+            return real_output(args, **kw)
+        subprocess.run, subprocess.check_output = fixture_run, fixture_output
         module.install_runtime = lambda *a, **kw: (Path(sys.executable), dict(os.environ))
         original_command = module.ColabClient.command
         def command(self, *args):
@@ -210,6 +227,8 @@ def test_entire_notebook_executes_with_fixture_websites_and_reruns(tmp_path):
         assert status["stats"]["total"] == 2
         assert status["stats"]["unique_emails"] == 2
         assert status["stats"]["terminal"] == 2
+        assert status["collection"]["completion"]["automatic_passes_finished"]
+        assert status["stats"]["sites_unstarted"] == 0
         with zipfile.ZipFile(status["export_zip"]) as archive:
             assert b"office@acmeglazing.co.uk" in archive.read("emails.csv")
             assert b"fixture@gmail.com" in archive.read("unique_emails.csv")
@@ -239,17 +258,25 @@ def test_bootstrap_uses_feature_ref_before_merge_without_resetting_any_checkout(
     monkeypatch.setattr(sys, "path", list(sys.path))
     calls = []
 
+    current_ref = None
+
     def run(args, **kwargs):
+        nonlocal current_ref
         calls.append(args)
         if args[1] == "clone":
             (Path(args[-1]) / ".git").mkdir(parents=True)
-        if "checkout" in args:
-            directory = tmp_path / "publicmail-code" / "notebooks"
-            directory.mkdir()
-            (directory / "colab_client.py").touch()
+        if "fetch" in args:
+            current_ref = args[-1]
+
+    def output(args, **kwargs):
+        if "status" in args:
+            return ""
+        if "show" in args:
+            return "WORKFLOW_VERSION = 1" if current_ref == "main" else "WORKFLOW_VERSION = 2"
+        return "test-source-revision\n"
 
     monkeypatch.setattr(subprocess, "run", run)
-    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "test-source-revision\n")
+    monkeypatch.setattr(subprocess, "check_output", output)
     cells = {c["id"]: "".join(c["source"]) for c in json.loads(NOTEBOOK.read_text())["cells"]}
     namespace = {
         "CONTENT_ROOT": tmp_path,
@@ -312,3 +339,70 @@ def test_active_previous_process_prevents_a_duplicate_notebook_command(tmp_path)
     client._active = Active()
     with pytest.raises(RuntimeError, match="still stopping"):
         client.json("prepare")
+
+
+def test_reused_checkout_with_old_colab_client_is_refreshed_and_dirty_edits_are_not_overwritten(
+    tmp_path, monkeypatch
+):
+    module = client_module()
+    module.install_runtime = lambda repository, root, browser: (Path(sys.executable), {})
+    monkeypatch.setitem(sys.modules, "colab_client", module)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    source = tmp_path / "publicmail-code"
+    (source / ".git").mkdir(parents=True)
+    (source / "notebooks").mkdir()
+    (source / "notebooks" / "colab_client.py").write_text("# Old pilot-era client already exists\n")
+    calls = []
+    dirty = False
+
+    def output(args, **kwargs):
+        if "status" in args:
+            return " M local-edit.py" if dirty else ""
+        if "show" in args:
+            return "WORKFLOW_VERSION = 2"
+        return "new-source-revision\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda args, **kwargs: calls.append(args))
+    monkeypatch.setattr(subprocess, "check_output", output)
+    code = next(
+        "".join(c["source"]) for c in json.loads(NOTEBOOK.read_text())["cells"] if c["id"] == "install"
+    )
+    namespace = {
+        "CONTENT_ROOT": tmp_path,
+        "PROJECT_NAME": "fixture",
+        "CODE_REF": "main",
+        "ENABLE_BROWSER": False,
+    }
+    exec(compile(code, "install", "exec"), namespace)
+    assert any("fetch" in call and call[-1] == "main" for call in calls)
+    assert any("checkout" in call and "FETCH_HEAD" in call for call in calls)
+    assert namespace["CODE_REVISION"] == "new-source-revision"
+    calls.clear()
+    dirty = True
+    with pytest.raises(RuntimeError, match="SOURCE edits"):
+        exec(compile(code, "install", "exec"), namespace)
+    assert not calls  # No fetch/checkout/reset after discovering local source edits.
+
+
+def test_notebook_refuses_stale_installed_application_before_restoring_or_running(tmp_path):
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def json(self, action, *args):
+            assert action == "doctor"
+            return {"version": "old-pilot-version"}
+
+    code = next(
+        "".join(c["source"]) for c in json.loads(NOTEBOOK.read_text())["cells"] if c["id"] == "restore"
+    )
+    namespace = {
+        "USE_GOOGLE_DRIVE": False,
+        "ColabClient": Client,
+        "PYTHON": Path(sys.executable),
+        "LOCAL_PROJECT": tmp_path,
+        "APP_ENV": {},
+        "ENABLE_BROWSER": False,
+    }
+    with pytest.raises(RuntimeError, match="Stale application"):
+        exec(compile(code, "restore", "exec"), namespace)
