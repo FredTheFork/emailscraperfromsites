@@ -2,7 +2,7 @@
 
 [Open the notebook in Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
 
-While the Colab feature PR is still awaiting merge, use [its branch notebook](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/arena/ff9cb618-emailscraperfromsites/notebooks/PublicMail_Colab.ipynb). The bootstrap uses `main` once it includes Colab support; until then it explicitly reports its feature-branch fallback. Your input/results do not go to either Git branch.
+While the Colab feature PR is still awaiting merge, use [the pinned preview notebook](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). The bootstrap uses `main` once it includes Colab support; until then it explicitly reports its feature-branch fallback. Your input/results do not go to either Git branch.
 
 ## What you need
 

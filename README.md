@@ -31,7 +31,7 @@ No raw HTML, PDF bodies, or screenshots are retained by default. Only source URL
 
 ### [Open Public Mail in Google Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
 
-Before the Colab PR is merged, [open the feature-branch notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/arena/ff9cb618-emailscraperfromsites/notebooks/PublicMail_Colab.ipynb). The installer uses `main` when ready, otherwise explicitly reports the feature-branch fallback.
+Before the Colab PR is merged, [open the pinned preview notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/ffd518c60945df351f1c03b374bb75a01dda4a61/notebooks/PublicMail_Colab.ipynb). The installer uses `main` when ready, otherwise explicitly reports the feature-branch fallback.
 
 1. Choose a **CPU Python runtime**; leave **Use Google Drive** enabled.
 2. Run all cells, approve the normal Drive mount, and upload your **actual `domains.csv`** when prompted (or select a private Drive file path). Your 33,144-domain CSV is **not** published in this repository.
