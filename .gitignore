@@ -34,3 +34,6 @@ dist/
 .playwright*/
 node_modules/
 .DS_Store
+
+# Notebook checkpoints may contain private cell outputs.
+.ipynb_checkpoints/

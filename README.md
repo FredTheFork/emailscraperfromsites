@@ -10,7 +10,7 @@ Your supplied CSV contains **33,144 unique domains**, not 33,144 confirmed email
 
 This project makes the **process recoverable and the gaps measurable**. Limits, failures, blocked sites, and no-email outcomes are exported alongside successes. An observed email is not proof of ownership, deliverability, or marketing consent.
 
-**Recommended hosting:** an always-on Linux VPS with Docker and a persistent local SSD. Your laptop can be switched off after deployment. **Colab is not an unattended production host**: its backend can sometimes continue after disconnecting, but sessions may end because of idle/runtime/resource limits and its local disk is ephemeral. Do not rely on it for this entire job.
+**Run remotely in Google Colab:** use the notebook below for installation, private input upload, pilot/full runs, verified Drive checkpoints, resume, and downloads—no local Python or VPS required. Colab sessions can expire, so plan for resumable sessions rather than a guarantee of one uninterrupted run. An always-on VPS with Docker remains an alternative for continuously supervised operation.
 
 **About the old log:** the pasted excerpt ends during Companies House resolution. It contains no traceback or final exit status, so it does not establish whether the process crashed, was interrupted, or was still running. The preceding Common Crawl stages report successful completion.
 
@@ -22,18 +22,35 @@ This project makes the **process recoverable and the gaps measurable**. Limits, 
 - **Optional JS fallback:** Chromium rendering of a small number of pages on no-email sites; uses the same safe HTTP pipeline. Not stealth and not an access-control bypass.
 - **Reliability:** persistent site queue and page frontier, per-page atomic evidence/discovery commits, an exclusive runner lock, recovery after interruption, bounded requests/downloads/PDF parsing, durable backoff and `Retry-After`.
 - **Observability:** authenticated dashboard, live totals, pause/resume, 100-claim pilot, full queue, page-level trails, searchable domains/emails, requeue controls, worker heartbeat, coverage CSV, online SQLite backups.
-- **Deployment:** non-root Docker image, Compose, persistent volume, optional HTTPS reverse proxy, optional browser build, pinned runtime dependencies, automated tests and CI.
+- **Colab:** complete notebook with isolated installation, private CSV/SQLite upload, optional Chromium, measured pilot/full runs, progress, verified multi-generation Drive snapshots, recovery, gap requeue, and CSV/JSONL ZIP downloads.
+- **Deployment alternative:** non-root Docker image, Compose, persistent volume, optional HTTPS reverse proxy, optional browser build, pinned runtime dependencies, automated tests and CI.
 
 No raw HTML, PDF bodies, or screenshots are retained by default. Only source URLs, short evidence context, methods, and timestamps are saved.
 
-## Quick start: Docker (recommended)
+## Quick start: Google Colab — no local installation
+
+### [Open Public Mail in Google Colab](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/main/notebooks/PublicMail_Colab.ipynb)
+
+Before the Colab PR is merged, [open the feature-branch notebook here](https://colab.research.google.com/github/FredTheFork/emailscraperfromsites/blob/arena/ff9cb618-emailscraperfromsites/notebooks/PublicMail_Colab.ipynb). The installer uses `main` when ready, otherwise explicitly reports the feature-branch fallback.
+
+1. Choose a **CPU Python runtime**; leave **Use Google Drive** enabled.
+2. Run all cells, approve the normal Drive mount, and upload your **actual `domains.csv`** when prompted (or select a private Drive file path). Your 33,144-domain CSV is **not** published in this repository.
+3. Review the default **100-claim pilot** and its evidence/coverage ZIP.
+4. Select **full in the Start/resume cell**, then run that cell again. It processes the saved queue remotely; no reinstall/re-upload is needed.
+5. Download the result ZIP, also copied to your private Drive project. After a runtime reset, run setup with the **same project name**, restore the verified snapshot, and continue.
+
+The notebook keeps the active SQLite DB on Colab's **local `/content` disk**, not the Drive mount; only verified closed snapshots/input/result ZIPs go to Drive. It retains three good snapshot generations, handles graceful interruption, and stops new claims if periodic backup fails. An abrupt runtime loss can still discard work since the last completed remote snapshot. Use only **one Colab runtime per project**; Drive's advisory marker is not a distributed lock guarantee.
+
+The application is installed in a private virtual environment, avoiding Colab kernel dependency conflicts and IPython `asyncio.run` errors. Browser fallback is enabled by default in the notebook and includes installation/preflight. No public web server, tunnel, or dashboard key is required.
+
+See **[the complete Colab guide](docs/COLAB.md)** for first-run/resume instructions, runtime limits, storage layout, exports, deeper passes and troubleshooting. No scraper can promise 30,000/33,144 emails from a domain count.
+
+## Always-on Docker alternative
 
 On your **cloud server**, with Git and Docker Engine + Compose installed:
 
 ```bash
-# Until the feature is merged, explicitly clone the working branch:
-git clone --branch arena/ca32fcad-emailscraperfromsites \
-  https://github.com/FredTheFork/emailscraperfromsites.git publicmail
+git clone https://github.com/FredTheFork/emailscraperfromsites.git publicmail
 cd publicmail
 cp .env.example .env
 chmod 600 .env
@@ -174,10 +191,12 @@ See [architecture and recovery semantics](docs/ARCHITECTURE.md) and [security no
 
 ```bash
 pip install -e '.[dev]'
-ruff check src tests
-ruff format --check src tests
+ruff check src tests notebooks/colab_client.py
+ruff format --check src tests notebooks/colab_client.py
 pytest --cov=publicmail --cov-report=term-missing
 node --check src/publicmail/static/app.js
 ```
 
 The automated suite uses controlled local/fake websites, not unsolicited live crawling. It covers extraction, input schemas, deduplication, safe exports, transaction rollback, robots and redirects, response bounds, retries, pause/resume primitives, worker locks, cancellation recovery, PDFs, authentication, and the API/CLI. CI also builds and health-checks the standard container. Real-site yield is **not** established by unit tests. Run the deployment pilot before the full crawl.
+
+Colab-specific tests also verify snapshot recovery, failed-copy retention, subprocess supervision and private-environment installation. See `docs/COLAB.md` for the opt-in Jupyter notebook execution tests; these use synthetic fixtures, not a connected Google account or real-site yield.

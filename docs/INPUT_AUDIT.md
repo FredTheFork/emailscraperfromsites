@@ -33,3 +33,9 @@ The old harvester is a domain-discovery pipeline, not evidence that every site h
 The entire input was imported into the local, ignored `data/harvest.db` for the read-only development preview. No live domain crawl was started: this sandbox only permits outbound access to a small set of development/package hosts. There are **no real-site email yield claims** from this audit.
 
 Neither `domains.csv`, its rows, nor the populated runtime database is committed/pushed. The deployment starts empty; upload your private input on your server. The repository contains only a tiny synthetic example and generated test fixtures.
+
+## Colab workflow validation
+
+The supplied CSV was also imported through the new Colab session helper and restored into a separate fresh-runtime directory from a verified online SQLite snapshot: **33,144 inserted, zero invalid, 33,144 pending after restore**. No target-site crawl ran; there were zero scanned pages and zero collected emails in that audit. Local directories simulated the backup filesystem for this check; a Google account/Drive cloud mount was not accessed. This establishes input/recovery behavior, not real-site yield or a guarantee of uninterrupted Colab hosting.
+
+The original input is available privately in the workspace as `data/inbox/domains.csv` and remains ignored by Git. The notebook asks for a private upload or Drive file path on its first run, then retains the queue and a private saved-input copy for later sessions. It cannot transfer an Arena upload into someone else's Google Drive without that user's normal Colab upload/authorization step.

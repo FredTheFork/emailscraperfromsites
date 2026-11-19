@@ -9,8 +9,7 @@ Install Git and Docker Engine with the Compose plugin using your provider/OS's o
 ## 2. Install the application
 
 ```bash
-git clone --branch arena/ca32fcad-emailscraperfromsites \
-  https://github.com/FredTheFork/emailscraperfromsites.git publicmail
+git clone https://github.com/FredTheFork/emailscraperfromsites.git publicmail
 cd publicmail
 cp .env.example .env
 chmod 600 .env
@@ -20,7 +19,7 @@ docker compose logs --tail=50 app
 docker compose exec -T app cat /data/admin-token
 ```
 
-After this feature is merged, a normal default-branch clone is also fine. Keep your access key private. If you supply `SCRAPER_TOKEN` instead, the key file is not generated and the `cat` command is unnecessary. Generate a random unique value; do not reuse another service's password.
+For the separate no-VPS notebook workflow, see [Google Colab](COLAB.md). Keep your access key private. If you supply `SCRAPER_TOKEN` instead, the key file is not generated and the `cat` command is unnecessary. Generate a random unique value; do not reuse another service's password.
 
 The initial queue is paused, so installing or importing does not start traffic. After an already-running service restarts, its **persisted desired mode** is restored, and interrupted sites resume from the saved frontier. A deliberately paused service stays paused.
 
