@@ -14,3 +14,7 @@ This is a **private, single-operator tool**, not a public arbitrary-URL proxy or
 - Access framing restrictions are intentionally omitted for Arena's embedded preview; data/control still require the access key. On a separately deployed production host you may add `frame-ancestors 'none'` in your reverse proxy if you do not need embedding.
 
 If you find a vulnerability, report it privately to the repository owner using an available private channel or GitHub's private vulnerability reporting if enabled. Do not post real access keys, private datasets, or scraped personal data in a public issue. Rotate a leaked key and restrict access immediately.
+
+## Google Colab
+
+The notebook keeps application dependencies isolated and the live database on local runtime storage. Mount Drive only through Colab's normal authorization flow. Keep input, snapshots, exports and notebook outputs private; clear outputs before sharing. Snapshots are checksum-verified but not encrypted by this application, and Drive account permissions/retention are the operator's responsibility. Use only one runtime per project: Drive's advisory session marker is not a distributed lock. Runtime termination can lose work since the last fully saved snapshot. No keep-alive or platform-limit evasion is included. See `docs/COLAB.md`.

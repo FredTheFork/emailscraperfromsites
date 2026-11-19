@@ -25,6 +25,9 @@ class CrawlSettings(BaseModel):
     sitemap_urls: int = Field(2000, ge=10, le=20_000)
     http_fallback: bool = True
     browser: bool = False
+    # Automatic Colab collection also renders important public contact pages
+    # when a footer/third-party email has already been found by HTTP.
+    browser_contact_pages: bool = False
     browser_pages: int = Field(2, ge=1, le=5)
     browser_concurrency: int = Field(2, ge=1, le=4)
     user_agent: str = Field("PublicMailBot/1.0", min_length=5, max_length=250)

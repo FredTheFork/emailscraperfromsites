@@ -31,11 +31,11 @@ state SQLite: sites ──claim──► async site workers (default 24)
 - `pages`: unique `(site_id, url)` frontier, depth, priority, kind, seed/page role, pending/fetching/done/error/blocked/skipped state, attempt count, final URL, HTTP/content metadata, error, browser state.
 - `email_addresses`: globally normalized, unique addresses and first/last seen.
 - `observations`: unique `(site_id, email, source_url, method)` evidence, confidence, relationship, short context, timestamps.
-- `meta`: schema settings, desired run/pause mode, remaining pilot claim budget, worker heartbeat/error.
+- `meta`: schema settings, desired run/pause mode, remaining optional pilot claim budget, worker heartbeat/error, automatic coverage plan/stages and stop reason.
 - `request_cooldowns`: registrable-domain cooldowns shared by all workers and persisted across restarts; a different input alias must not evade a server's Retry-After.
 - `imports`: batch import summary. `events`: latest ~10,000 operational events (bounded).
 
-Schema version 1 uses SQLite WAL, `synchronous=FULL`, foreign keys, prepared parameters, short immediate write transactions, and a busy timeout. Downloaded bodies are not persisted. Corrupted/unsupported state or an input database used accidentally as state is rejected rather than deliberately migrated into the input.
+The `sites_due` partial index orders pending/retry claims directly by due time and ID, avoiding a sort of the whole remaining 33k-site queue on every claim. Schema version 1 uses SQLite WAL, `synchronous=FULL`, foreign keys, prepared parameters, short immediate write transactions, and a busy timeout. Downloaded bodies are not persisted. Corrupted/unsupported state or an input database used accidentally as state is rejected rather than deliberately migrated into the input.
 
 ## Atomicity and resumption
 
@@ -55,7 +55,7 @@ Each import commits batches of 500 valid normalized rows. Reimport is idempotent
 - Unreachable robots and robots 5xx/429 fail closed. 404/410 robots means no rules. Robots 401/403 or disallowed homepage means blocked. A disallowed individual content path is skipped while allowed paths remain eligible.
 - Ordinary network/TLS/404 homepage failures can try supplied URL, HTTPS apex/www, then optional public HTTP apex/www. This is **never** used as a workaround for 401/403 or a challenge. TLS certificate verification is never disabled; HTTP fallback is explicitly plaintext and optional.
 - 429 and transient failures schedule a durable future site attempt, with exponential backoff, positive jitter, and no earlier than `Retry-After`. Work on unrelated sites can continue. No spin/sleep loop monopolizes a worker for a long Retry-After.
-- 401/403 content and recognized access challenges stop the site and preserve any prior evidence. No proxy pool, CAPTCHA solver, browser-fingerprint spoofing, or authentication is used.
+- 401/403 homepages and recognized access challenges stop the site and preserve any prior evidence. An individually denied leaf path is retained as blocked, not retried by automatic deeper passes; independently permitted public paths remain eligible. No proxy pool, CAPTCHA solver, browser-fingerprint spoofing, or authentication is used.
 - Retry budgets are finite. Exhausted rate-limited sites become blocked. Persistent content-page failures remain in the evidence trail and coverage report even when another page produced emails.
 
 Robots parsing uses Protego, including wildcard/end-anchor rules, longest matching rules with allow precedence, agent groups, fractional crawl-delay, and request-rate directives. Unusual nonstandard dialects can still need review. The bounded LRU policy cache does not retain every robots file from a 33k-site run. The bundled suffix snapshot avoids startup network dependencies but may lag newly introduced suffixes. Update and retest dependencies periodically.
@@ -72,7 +72,7 @@ Limits include content-page attempts, link depth, candidate frontier, total site
 
 Each normalized address records how it was found and the exact final public source URL. There is no filtering to the website's own domain; personal/free-provider addresses and third-party addresses are retained. Relationship flags are relative to the **original domain**, not an ownership verification system.
 
-Extraction covers mailto links, normal text, HTML entities, JSON-LD/literal scripts, named email attributes, common at/dot spacing/obfuscation, XOR email obfuscation, ROT13 attributes, simple literal concatenation/reversal, and PDF text. JavaScript is never `eval`uated by the static extractor. Example domains, obvious image suffixes, and known telemetry-looking addresses are filtered to reduce noise; false positives and false negatives remain possible. Rare quoted or non-ASCII local parts are not fully supported. `high`/`medium` refer to evidence syntax, **not** mailbox validity.
+Extraction covers mailto links, normal text, HTML entities, JSON-LD/literal scripts, named email attributes, common at/dot spacing/obfuscation, public noscript/template text, nonprinting joiners, percent-encoded attributes, XOR email obfuscation, ROT13 attributes, simple literal concatenation/reversal, and PDF text. JavaScript is never `eval`uated by the static extractor. Example domains, obvious image suffixes, and known telemetry-looking addresses are filtered to reduce noise; false positives and false negatives remain possible. Rare quoted or non-ASCII local parts are not fully supported. `high`/`medium` refer to evidence syntax, **not** mailbox validity.
 
 Email normalization lowercases the local part as well as IDNA domain, a documented practical deduplication choice. One email may appear on many input websites and in several methods/pages. The main email export aggregates per original website/address; the observations ledger retains all individual sources/methods. No SMTP/DNS deliverability check or message is sent.
 
@@ -80,7 +80,7 @@ PDF parsing runs in a separate subprocess with CPU/address-space limits where av
 
 ## Optional browser boundary
 
-When enabled, only sites with no HTTP-found email enter a small rendered fallback (default two selected HTML pages). Chromium has a dead direct-network proxy and DNS disabled. Routes are fulfilled through the existing safe aiohttp client, which pins public DNS answers and enforces robots, pacing, scope, body bounds, and redirects. Non-GET traffic, cross-site resources, service workers, downloads, and WebSockets are blocked. A real access challenge remains blocked.
+When enabled, JavaScript homepage shells can render early to discover navigation before spending the HTTP budget on guessed paths; otherwise sites with no HTTP-found email enter a small rendered fallback (default two selected HTML pages). Automatic Colab profiles additionally enable `browser_contact_pages`, so a footer/designer address does not suppress important contact/homepage rendering. The deeper pass raises the bounded render allowance to four pages. Chromium has a dead direct-network proxy and DNS disabled. Routes are fulfilled through the existing safe aiohttp client, which pins public DNS answers and enforces robots, pacing, scope, body bounds, and redirects. Non-GET traffic, cross-site resources, service workers, downloads, and WebSockets are blocked. A real access challenge remains blocked.
 
 This is intentionally not a complete normal browser session. Sites depending on third-party bundles/APIs/cookies may stay empty. Chromium/PDF parsers still process untrusted data; non-root containers, host egress restrictions, updates, and resource monitoring remain important. The optional browser path needs an actual Chromium installation; default CI does not prove live-site rendering coverage.
 
@@ -91,3 +91,15 @@ All data/control APIs require a constant-time-compared bearer access key. The st
 CSV formula injection is escaped for spreadsheet consumers; JSONL preserves exact data. Exports stream through independent read-only SQLite connections. Each export query sees a read snapshot; files generated at different times during a live crawl can differ in totals. Backups use SQLite's online backup API and require separate protected/offsite storage for machine-loss recovery.
 
 The CLI web launcher supervises the embedded worker: an unexpected runtime failure exits the service for a process supervisor to restart. Health also reports stale/stopped workers. No guarantee is made against disk loss, credential leakage, OS compromise, or a provider suspending the server. The deployment guide describes backups, least exposure, and explicit recovery.
+
+## Automatic Colab orchestration
+
+`python -m publicmail.colab ... run` and the notebook default to **all sites, no planned session time stop, browser on, three persisted stages**. The regular dashboard/`publicmail run` remain available separately. See [Colab profiles and operating limits](COLAB.md).
+
+`coverage.py` owns the versioned `automatic_coverage_plan` metadata. Stage 0 drains the existing whole list (including a pre-v2 pilot's pending queue). Stage 1 selects no-email/limited/transient/deferred-document/unrendered-contact work, increases finite budgets, and retains all observations and denied paths. Stage 2 gives transient failures/exhausted 429s one bounded additional recovery round with cooldowns intact; access denials/robots/CAPTCHA are excluded. Marker changes and requeue selection commit together. Prepared stages are idempotent; a finished plan does not rerun just to chase an email count. New input/reviewed work starts a new plan generation without deleting old evidence.
+
+Stage boundaries and periodic progress use verified local-to-Drive snapshots. Runtime termination cannot guarantee final cleanup, so a new Run all restores and continues the saved stage. Source setup refreshes a clean checkout and checks workflow version 2, preventing stale notebook/runtime code from silently retaining a 100-claim pilot. It never overwrites local source edits or private state.
+
+Every export has a `collection` report plus `READ_ME_FIRST.txt`/`run_report.json`. Completion is independent of address yield: all sites must have started, no pending/retry/active sites may remain, and all automatic stages must be finished. Otherwise the label is INCOMPLETE/PILOT_ONLY, even if the first queue was drained. A finished finite pass can still have blocked/failed/no-email/errors/limits; COMPLETE_WITH_GAPS records them. No state certifies exhaustive web coverage or a guaranteed number of addresses.
+
+Final export/checkpoint retain the idle-worker guard, attempt both operations, preserve the original exception on cleanup failure, and keep local ZIP metadata before a failed Drive copy. `last-run.json` records the actual stop reason and cleanup errors instead of reporting every engine exit as “finished”.

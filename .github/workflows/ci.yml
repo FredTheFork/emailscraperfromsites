@@ -22,8 +22,8 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -e '.[dev]'
-      - run: ruff check src tests
-      - run: ruff format --check src tests
+      - run: ruff check src tests notebooks/colab_client.py
+      - run: ruff format --check src tests notebooks/colab_client.py
       - run: pytest --cov=publicmail --cov-report=term-missing
       - run: node --check src/publicmail/static/app.js
       - run: pip wheel --no-deps --wheel-dir /tmp/wheels .
@@ -42,6 +42,7 @@ jobs:
       - run: pytest tests/test_browser.py -v
         env:
           PUBLICMAIL_TEST_BROWSER: "1"
+      - run: python -m publicmail.colab --work-dir /tmp/publicmail-colab-browser doctor --check-browser
 
   container:
     runs-on: ubuntu-latest
@@ -55,3 +56,18 @@ jobs:
           curl --fail http://127.0.0.1:8000/healthz
       - if: always()
         run: docker compose logs && docker compose down
+
+  colab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.lock
+      - run: pip install -e '.[dev,notebook]'
+      - run: pytest tests/test_colab.py tests/test_colab_notebook.py -v
+        env:
+          PUBLICMAIL_TEST_NOTEBOOK: "1"
+          PUBLICMAIL_TEST_COLAB_INSTALL: "1"

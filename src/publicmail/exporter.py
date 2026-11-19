@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from .coverage import collection_report, report_text
 from .store import Store
 
 QUERIES = {
@@ -129,7 +130,14 @@ def write_exports(store: Store, output: str | Path, *, jsonl: bool = False) -> l
             for row in rows:
                 target.write(json.dumps(row, ensure_ascii=False) + "\n")
         written.append(path)
+    report = collection_report(store)
     summary = directory / "summary.json"
-    summary.write_text(json.dumps(store.stats(), indent=2) + "\n", encoding="utf-8")
+    summary.write_text(json.dumps({**store.stats(), "collection": report}, indent=2) + "\n", encoding="utf-8")
     written.append(summary)
+    path = directory / "run_report.json"
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    written.append(path)
+    path = directory / "READ_ME_FIRST.txt"
+    path.write_text(report_text(report), encoding="utf-8")
+    written.append(path)
     return written

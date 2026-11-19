@@ -111,7 +111,7 @@ def test_deduplication_evidence_relationships_and_exports(store, seeded, tmp_pat
     assert relationship("x@gmail.com", "acmeglazing.co.uk") == "free_provider"
     assert relationship("x@agency.co.uk", "acmeglazing.co.uk") == "external"
     paths = write_exports(store, tmp_path / "exports", jsonl=True)
-    assert len(paths) == 6
+    assert len(paths) == 8
     with (tmp_path / "exports/emails.csv").open(encoding="utf-8-sig", newline="") as target:
         rows = list(csv.DictReader(target))
     assert len(rows) == 3

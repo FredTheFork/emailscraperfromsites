@@ -95,3 +95,75 @@ async def test_real_rendered_denial_is_not_bypassed(fast_settings):
         assert client.calls == [HOME + "robots.txt", HOME]
     finally:
         await renderer.close()
+
+
+async def test_real_contact_rendering_is_not_suppressed_by_footer_email(store, seeded, fast_settings):
+    from publicmail.engine import SiteCrawler
+    from publicmail.pdf import PDFExtractor
+
+    contact = (
+        """<html><title>Contact us</title><body>"""
+        + ("Public office information. " * 30)
+        + """
+    <script>fetch('/contact-data').then(r=>r.json()).then(d=>{
+      const a=document.createElement('a'); a.href='mailto:'+d.local+'@'+d.host;
+      a.textContent='Email our office'; document.body.appendChild(a);
+    });</script></body></html>"""
+    )
+    cfg = fast_settings.model_copy(update={"browser": True, "browser_contact_pages": True})
+    client = FakeFetcher(
+        cfg,
+        {
+            HOME: response(HOME, '<a href="/contact">Contact</a><footer>design@agency.co.uk</footer>'),
+            HOME + "contact": response(HOME + "contact", contact),
+            HOME + "contact-data": response(
+                HOME + "contact-data",
+                json.dumps({"local": "real-rendered-office", "host": "acmeglazing.co.uk"}),
+                content_type="application/json",
+            ),
+        },
+    )
+    renderer = await renderer_for_test(client)
+    try:
+        store.control("start")
+        site = store.claim_site("test", 600, 3)
+        await SiteCrawler(store, client, Robots(client), PDFExtractor(), renderer).crawl(site)
+        evidence = {e["email"]: e for e in store.list_emails()["items"]}
+        assert {"real-rendered-office@acmeglazing.co.uk", "design@agency.co.uk"} <= evidence.keys()
+        assert evidence["real-rendered-office@acmeglazing.co.uk"]["source_url"] == HOME + "contact"
+    finally:
+        await renderer.close()
+
+
+async def test_real_js_navigation_is_discovered_before_page_budget_is_spent(store, seeded, fast_settings):
+    from publicmail.engine import SiteCrawler
+    from publicmail.pdf import PDFExtractor
+
+    shell = (
+        """<html><title>Our office</title><body><div id="app"></div><script>
+    const a=document.createElement('a'); a.href='/real/office-contact';
+    a.textContent='Contact our office'; document.body.appendChild(a);
+    </script>"""
+        + (" " * 250)
+        + "</body></html>"
+    )
+    # Script text, not total HTML size, drives the shell hint.
+    shell = shell.replace("</script>", "/*" + ("public client navigation " * 20) + "*/</script>")
+    cfg = fast_settings.model_copy(update={"browser": True, "browser_pages": 1, "max_pages": 2})
+    client = FakeFetcher(
+        cfg,
+        {
+            HOME: response(HOME, shell),
+            HOME + "real/office-contact": response(HOME + "real/office-contact", "real-navigation@gmail.com"),
+        },
+    )
+    renderer = await renderer_for_test(client)
+    try:
+        store.control("start")
+        site = store.claim_site("test", 600, 3)
+        await SiteCrawler(store, client, Robots(client), PDFExtractor(), renderer).crawl(site)
+        assert store.get_site(1)["email_count"] == 1
+        assert HOME + "real/office-contact" in client.calls
+        assert HOME + "contact" not in client.calls
+    finally:
+        await renderer.close()

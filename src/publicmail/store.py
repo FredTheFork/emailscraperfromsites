@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS sites (
     finished_at REAL
 );
 CREATE INDEX IF NOT EXISTS sites_queue ON sites(status, next_attempt_at, id);
+-- A status-first index sorts the entire pending/retry union on EVERY claim.
+-- This partial due-order index keeps full 33k-site dispatch logarithmic.
+CREATE INDEX IF NOT EXISTS sites_due ON sites(next_attempt_at, id)
+    WHERE status IN ('pending','retry');
 CREATE INDEX IF NOT EXISTS sites_email_count ON sites(email_count);
 CREATE TABLE IF NOT EXISTS pages (
     id INTEGER PRIMARY KEY,
@@ -358,7 +362,7 @@ class Store:
                 (now, now, max_attempts),
             )
             row = db.execute(
-                "SELECT * FROM sites WHERE status IN ('pending','retry') AND next_attempt_at<=? "
+                "SELECT * FROM sites INDEXED BY sites_due WHERE status IN ('pending','retry') AND next_attempt_at<=? "
                 "AND attempts<? ORDER BY next_attempt_at,id LIMIT 1",
                 (now, max_attempts),
             ).fetchone()
@@ -603,14 +607,17 @@ class Store:
                 (page["site_id"], page["site_id"]),
             )
 
-    def browser_candidates(self, site_id: int, limit: int) -> list[dict]:
+    def browser_candidates(
+        self, site_id: int, limit: int, *, important_only: bool = False, preferred_id: int | None = None
+    ) -> list[dict]:
         with self.lock:
             return [
                 dict(row)
                 for row in self.conn.execute(
                     "SELECT * FROM pages WHERE site_id=? AND status='done' AND kind='html' AND browser_status='' "
-                    "ORDER BY (role='seed'),priority DESC,id LIMIT ?",
-                    (site_id, limit),
+                    "AND (?=0 OR role='seed' OR priority>=650) "
+                    "ORDER BY (id=?) DESC,(role='seed'),priority DESC,id LIMIT ?",
+                    (site_id, important_only, preferred_id or -1, limit),
                 )
             ]
 
@@ -712,10 +719,15 @@ class Store:
                 (time.time() - 3600,),
             ).fetchone()[0]
             last_import = self.conn.execute("SELECT * FROM imports ORDER BY id DESC LIMIT 1").fetchone()
+            started = self.conn.execute("SELECT COUNT(*) FROM sites WHERE started_at IS NOT NULL").fetchone()[
+                0
+            ]
             meta = {r[0]: json.loads(r[1]) for r in self.conn.execute("SELECT key,value FROM meta")}
         terminal = sum(statuses[s] for s in TERMINAL)
         return {
             "total": total,
+            "sites_started": started,
+            "sites_unstarted": total - started,
             "with_email": with_email,
             "unique_emails": unique,
             "site_email_pairs": pairs,
