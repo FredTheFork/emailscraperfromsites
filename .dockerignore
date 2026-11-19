@@ -1,0 +1,23 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.cache
+.arena
+*.egg-info
+.coverage
+htmlcov
+data
+backups
+exports
+.env
+.env.*
+*.db
+*.csv
+node_modules
+build
+dist
+Unselected files

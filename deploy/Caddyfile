@@ -1,0 +1,12 @@
+{$SCRAPER_HOSTNAME} {
+    encode zstd gzip
+    request_body {
+        max_size 270MB
+    }
+    reverse_proxy app:8000 {
+        # A full 33k-domain import can outlast a normal short proxy timeout.
+        transport http {
+            response_header_timeout 10m
+        }
+    }
+}

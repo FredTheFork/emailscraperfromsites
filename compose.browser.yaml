@@ -1,0 +1,11 @@
+# Add only if you need the optional, resource-heavier JavaScript fallback.
+# docker compose -f compose.yaml -f compose.browser.yaml up -d --build
+services:
+  app:
+    build:
+      args:
+        WITH_BROWSER: "true"
+    shm_size: 1gb
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=1g,mode=1777
